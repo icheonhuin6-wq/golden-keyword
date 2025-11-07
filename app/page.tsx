@@ -1,14 +1,52 @@
 'use client';
 
 import { useState, useMemo } from 'react';
+import { getKeywordIdeas, RawKeywordRow } from '../lib/keyword-source';
 
-type KeywordResult = {
-  keyword: string;
-  volume: number;
-  difficulty: number;
-  cpc: number;
-  note: string;
+type Grade = 'gold' | 'good' | 'normal' | 'bad';
+
+type KeywordResult = RawKeywordRow & {
+  score: number; // 0~100
+  grade: Grade;
 };
+
+function calcScore(volume: number, competition: number, cpc: number): number {
+  // volume: 최대 30점 (5000 이상 풀점 근처)
+  const vPart = Math.min(volume / 5000, 1) * 30;
+
+  // cpc: 최대 40점 (800원 이상 풀점 근처)
+  const cPart = Math.min(cpc / 800, 1) * 40;
+
+  // competition(0~1): 낮을수록 좋음 → (1 - comp) 최대 30점
+  const dPart = (1 - Math.max(0, Math.min(competition, 1))) * 30;
+
+  const raw = vPart + cPart + dPart;
+  return Math.round(Math.max(0, Math.min(raw, 100)));
+}
+
+function gradeFromScore(score: number): Grade {
+  if (score >= 80) return 'gold';
+  if (score >= 60) return 'good';
+  if (score >= 40) return 'normal';
+  return 'bad';
+}
+
+function gradeLabel(g: Grade): string {
+  if (g === 'gold') return '황금';
+  if (g === 'good') return '양호';
+  if (g === 'normal') return '보통';
+  return '비추';
+}
+
+function gradeColorClasses(g: Grade): string {
+  if (g === 'gold')
+    return 'text-yellow-800 bg-yellow-50 border-yellow-300';
+  if (g === 'good')
+    return 'text-emerald-800 bg-emerald-50 border-emerald-300';
+  if (g === 'normal')
+    return 'text-gray-700 bg-gray-50 border-gray-200';
+  return 'text-red-700 bg-red-50 border-red-300';
+}
 
 export default function Home() {
   const [keyword, setKeyword] = useState('');
@@ -18,55 +56,53 @@ export default function Home() {
   const [error, setError] = useState('');
   const [results, setResults] = useState<KeywordResult[]>([]);
 
-  // 키워드 2글자 이상일 때만 실행 허용
   const canRun = useMemo(() => keyword.trim().length >= 2, [keyword]);
 
-  const onRun = () => {
+  const onRun = async () => {
     if (!canRun || loading) return;
 
     setError('');
     setResults([]);
     setLoading(true);
 
-    // 실제 API 대신 "샘플 결과" 생성 (모양 확인용)
-    setTimeout(() => {
-      const base = keyword.trim();
+    const base = keyword.trim();
 
-      const mock: KeywordResult[] = [
-        {
-          keyword: `${base} 추천`,
-          volume: 4400,
-          difficulty: 32,
-          cpc: 720,
-          note: '구매 의도 강함 · 상위 노출 시 수익 기대',
-        },
-        {
-          keyword: `${base} 후기`,
-          volume: 2900,
-          difficulty: 27,
-          cpc: 540,
-          note: '리뷰형 컨텐츠 적합 · 블로그형 추천',
-        },
-        {
-          keyword: `${base} 비교`,
-          volume: 1900,
-          difficulty: 24,
-          cpc: 610,
-          note: '비교/가이드 글용 · 체류시간 유리',
-        },
-      ];
+    try {
+      // 🔸 실제 데이터 소스 진입 지점 (현재는 더미, 나중에 API로 교체)
+      const rows: RawKeywordRow[] = await getKeywordIdeas(
+        base,
+        country,
+        lang
+      );
 
-      setResults(mock);
+      const filled: KeywordResult[] = rows.map((row) => {
+        const score = calcScore(row.volume, row.competition, row.cpc);
+        const grade = gradeFromScore(score);
+        return { ...row, score, grade };
+      });
+
+      setResults(filled);
+    } catch (e) {
+      console.error(e);
+      setError(
+        '키워드 데이터를 불러오는 중 오류가 발생했습니다. 잠시 후 다시 시도해주세요.'
+      );
+    } finally {
       setLoading(false);
-    }, 1000);
+    }
   };
+
+  const best = useMemo(() => {
+    if (!results.length) return null;
+    return [...results].sort((a, b) => b.score - a.score)[0];
+  }, [results]);
 
   return (
     <main className="min-h-screen bg-white">
       <div className="mx-auto max-w-4xl px-6 py-10">
         <h1 className="text-2xl font-bold">🔑 황금키워드 자동 분석기</h1>
         <p className="mt-2 text-sm text-gray-500">
-          스텝2-3: 결과 패널(샘플 데이터)까지 구성. 다음 스텝에서 실제 데이터/로직 연결.
+          스텝4-2: 데이터 소스 레이어(getKeywordIdeas)에 연결된 내부 점수/등급 엔진.
         </p>
 
         {/* 입력 영역 */}
@@ -118,7 +154,7 @@ export default function Home() {
           <div className="flex items-center justify-between rounded-2xl bg-gray-50 p-4">
             <div className="text-sm text-gray-600">
               <div>검색엔진: Google (고정)</div>
-              <div>데이터 소스: 현재는 샘플 · 추후 실데이터 연동</div>
+              <div>데이터 소스: getKeywordIdeas()를 통해 추상화</div>
             </div>
 
             <button
@@ -129,13 +165,6 @@ export default function Home() {
                   ? 'bg-black text-white hover:opacity-90 '
                   : 'bg-gray-200 text-gray-400 cursor-not-allowed ') +
                 'rounded-xl px-4 py-2 border border-gray-300'
-              }
-              title={
-                !canRun
-                  ? '키워드를 2자 이상 입력하세요'
-                  : loading
-                  ? '분석 중...'
-                  : '입력값으로 분석 실행'
               }
             >
               {loading ? '분석 중...' : '분석 시작'}
@@ -149,21 +178,43 @@ export default function Home() {
           )}
         </section>
 
-        {/* 결과 영역 */}
-        <section className="mt-6">
+        {/* 추천 박스 */}
+        {best && (
+          <section
+            className={
+              'mt-6 rounded-2xl border px-4 py-3 ' +
+              gradeColorClasses(best.grade)
+            }
+          >
+            <div className="text-xs font-semibold">추천 결과</div>
+            <div className="mt-1 text-sm font-bold">
+              이 조합을 1순위로 공략하세요 👉 {best.keyword}
+            </div>
+            <div className="mt-1 text-xs">
+              종합 점수: <b>{best.score}</b>점 ({gradeLabel(best.grade)})
+            </div>
+            <div className="mt-1 text-xs">
+              (데이터 소스 교체 시 자동 재계산)
+            </div>
+          </section>
+        )}
+
+        {/* 결과 테이블 */}
+        <section className="mt-4">
           <h2 className="text-sm font-semibold text-gray-700">
-            📊 추천 키워드 후보 (샘플 데이터)
+            📊 추천 키워드 후보 (현재는 샘플 데이터 · 구조 테스트용)
           </h2>
 
           {loading && (
-            <div className="mt-3 rounded-xl bg-gray-50 px-4 py-3 text-sm text-gray-500">
+            <div className="mt-3 rounded-2xl bg-gray-50 px-4 py-3 text-sm text-gray-500">
               키워드 구조 분석 중입니다...
             </div>
           )}
 
           {!loading && results.length === 0 && (
             <p className="mt-3 text-xs text-gray-400">
-              위에서 키워드를 입력하고 &apos;분석 시작&apos;을 누르면 결과가 여기에 표시됩니다.
+              위에서 키워드를 입력하고 &apos;분석 시작&apos;을 누르면 결과가
+              여기에 표시됩니다.
             </p>
           )}
 
@@ -173,10 +224,11 @@ export default function Home() {
                 <thead className="bg-gray-50 text-gray-500">
                   <tr>
                     <th className="px-4 py-2">키워드</th>
-                    <th className="px-4 py-2">검색량(가상)</th>
-                    <th className="px-4 py-2">경쟁도</th>
+                    <th className="px-4 py-2">검색량</th>
+                    <th className="px-4 py-2">경쟁도(0~1)</th>
                     <th className="px-4 py-2">예상 CPC</th>
-                    <th className="px-4 py-2">메모</th>
+                    <th className="px-4 py-2">점수</th>
+                    <th className="px-4 py-2">등급</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -188,12 +240,19 @@ export default function Home() {
                       <td className="px-4 py-2 font-medium text-gray-800">
                         {r.keyword}
                       </td>
-                      <td className="px-4 py-2">{r.volume.toLocaleString()}</td>
-                      <td className="px-4 py-2">{r.difficulty}</td>
+                      <td className="px-4 py-2">
+                        {r.volume.toLocaleString()}
+                      </td>
+                      <td className="px-4 py-2">
+                        {r.competition.toFixed(2)}
+                      </td>
                       <td className="px-4 py-2">
                         ₩ {r.cpc.toLocaleString()}
                       </td>
-                      <td className="px-4 py-2 text-gray-600">{r.note}</td>
+                      <td className="px-4 py-2">{r.score}</td>
+                      <td className="px-4 py-2">
+                        {gradeLabel(r.grade)}
+                      </td>
                     </tr>
                   ))}
                 </tbody>
@@ -203,7 +262,8 @@ export default function Home() {
         </section>
 
         <div className="mt-4 text-xs text-gray-400">
-          v0.3 · UI + 입력 검증 + 샘플 결과 표시 · 다음: 실제 데이터 소스 연동 설계
+          v0.6 · 데이터 소스 계층 + 황금키워드 점수/등급 엔진 완성 (샘플 연동).
+          이후 스텝: Google / Naver 실제 API 키 연동.
         </div>
       </div>
     </main>
